@@ -185,6 +185,11 @@ class CarPlayVpnService : VpnService() {
             while (active.get()) {
                 val socket: Socket = server.accept()
                 Log.i(TAG, "airplay connection accepted from ${socket.remoteSocketAddress}")
+                // Redaction hides the address, so the family is the only part the report can carry.
+                attachment?.listener?.onDebugLog(
+                    "airplay control accepted family=" +
+                        (if (socket.inetAddress is Inet6Address) "IPv6" else "IPv4"),
+                )
                 socket.tcpNoDelay = true
                 socket.keepAlive = true
                 socket.setSoLinger(true, 0)

@@ -75,4 +75,25 @@ class DiagnosticRedactorTest {
         for (line in lines) assertNotNull(line, DiagnosticRedactor.redact(line))
         assertFalse(DiagnosticRedactor.redact(lines.last())!!.contains("192.168.49.1"))
     }
+
+    /** Which stack the iPhone reached is the only part of the data-plane arrival the report can carry. */
+    /** The resource-ownership line is the one that answers "did the phone ever give us audio". */
+    @Test fun carplayResourceOwnershipSurvivesRedaction() {
+        val line = "airplay modes resources=[resource1 owner=controller resource2 owner=accessory] " +
+            "appStates=[appState1=none appState2=other]"
+        assertEquals(line, DiagnosticRedactor.redact(line))
+    }
+
+    @Test fun addressFamilyOfTheAcceptedConnectionIsKept() {
+        assertEquals(
+            "airplay control accepted family=IPv4",
+            DiagnosticRedactor.redact("airplay control accepted family=IPv4"),
+        )
+        val event = DiagnosticRedactor.redact(
+            "airplay event connection accepted from /192.168.43.28:63514 family=IPv6",
+        )
+        assertNotNull(event)
+        assertTrue(event!!.endsWith("family=IPv6"))
+        assertFalse(event.contains("192.168.43.28"))
+    }
 }

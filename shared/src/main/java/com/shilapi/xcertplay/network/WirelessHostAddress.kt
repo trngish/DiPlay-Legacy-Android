@@ -4,15 +4,19 @@ import java.net.Inet4Address
 import java.net.Inet6Address
 import java.net.InetAddress
 
-/** Use the same scoped, link-local path for manual APs as for Wi-Fi Direct. */
+/**
+ * A manual access point hands the iPhone an IPv4 lease, so that is the address it can actually
+ * reach, and it is the same one put into the 0x4301 session parameters. The scoped link-local IPv6
+ * stays as the fallback for an interface that has nothing else, and it keeps the interface index
+ * because a link-local address is unusable without its scope.
+ */
 internal fun wirelessHostAddress(addresses: List<InetAddress>, interfaceIndex: Int): InetAddress? {
-    if (interfaceIndex > 0) {
-        addresses.filterIsInstance<Inet6Address>().firstOrNull { it.isLinkLocalAddress }?.let {
-            return Inet6Address.getByAddress(null, it.address, interfaceIndex)
-        }
-    }
-    return addresses.firstOrNull {
+    addresses.firstOrNull {
         it is Inet4Address && !it.isLoopbackAddress && !it.isLinkLocalAddress &&
             !it.isAnyLocalAddress && !it.isMulticastAddress
-    }
+    }?.let { return it }
+    if (interfaceIndex <= 0) return null
+    val linkLocal = addresses.filterIsInstance<Inet6Address>().firstOrNull { it.isLinkLocalAddress }
+        ?: return null
+    return Inet6Address.getByAddress(null, linkLocal.address, interfaceIndex)
 }

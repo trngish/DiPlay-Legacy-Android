@@ -50,6 +50,7 @@ object AirPlayPersistence {
     private const val KEY_DEBUG_LOGS_ENABLED = "debug_logs_enabled"
     private const val KEY_MANUFACTURER = "manufacturer"
     private const val KEY_MODEL = "model"
+    private const val KEY_CAR_NAME = "car_name"
     private const val KEY_OEM_LABEL = "oem_label"
     private const val KEY_FPS = "display_fps"
     private const val KEY_MEDIA_BUFFER_MS = "media_buffer_ms"
@@ -77,7 +78,7 @@ object AirPlayPersistence {
 
     const val DEFAULT_MANUFACTURER = "DiPlay"
     const val DEFAULT_MODEL = "DiPlay"
-    const val DEFAULT_OEM_LABEL = "BYD"
+    const val DEFAULT_CAR_NAME = "DiPlay"
     const val DEFAULT_MFI_I2C_PATH = "/dev/i2c-1"
 
     fun loadDisplayScaleTenths(context: Context): Int {
@@ -335,11 +336,26 @@ object AirPlayPersistence {
             .apply()
     }
 
+    /** The name the iPhone shows for this car; it is advertised, not merely displayed. */
+    fun loadCarName(context: Context): String =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getString(KEY_CAR_NAME, null)
+            ?.takeIf { it.isNotBlank() }
+            ?: DEFAULT_CAR_NAME
+
+    fun saveCarName(context: Context, carName: String) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .putString(KEY_CAR_NAME, carName)
+            .apply()
+    }
+
     fun loadOemLabel(context: Context): String =
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .getString(KEY_OEM_LABEL, DEFAULT_OEM_LABEL)
-            // iOS hides the car icon without a label.
-            .orEmpty().ifBlank { DEFAULT_OEM_LABEL }
+            .getString(KEY_OEM_LABEL, null)
+            // iOS hides the car icon without a label, so a cleared label follows the car name rather
+            // than becoming its own brand.
+            ?.takeIf { it.isNotBlank() }
+            ?: loadCarName(context)
 
     fun saveOemLabel(context: Context, oemLabel: String) {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()

@@ -9,6 +9,7 @@ import java.io.Closeable
 import java.math.BigInteger
 import java.net.DatagramPacket
 import java.net.DatagramSocket
+import java.net.Inet4Address
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.ServerSocket
@@ -383,8 +384,7 @@ class AirPlaySession(
                     }
                     debugLog("airplay /info request=$requestInfo")
                 }
-                Log.i(
-                    TAG,
+                debugLog(
                     "airplay /info features=${info["features"]} " +
                         "audioFormats=${(info["audioFormats"] as? List<*>)?.size ?: 0} " +
                         "audioLatencies=${(info["audioLatencies"] as? List<*>)?.size ?: 0}",
@@ -407,7 +407,15 @@ class AirPlaySession(
                     )
                 }
             }
-            else -> RtspMessage.Response(status = 200)
+            else -> {
+                // A bare 200 used to be returned in silence, which hides exactly the requests that
+                // decide whether the phone routes audio here.
+                debugLog(
+                    "airplay request unhandled method=${request.method} path=${request.path} " +
+                        "bytes=${request.body.size}",
+                )
+                RtspMessage.Response(status = 200)
+            }
         }
     }
 
@@ -489,7 +497,9 @@ class AirPlaySession(
         for (entry in streams) {
             val stream = asMap(entry) ?: continue
             val type = long(stream["type"])?.toInt() ?: continue
-            debugLog("airplay SETUP stream type=$type payload=$stream")
+            // "payload=" is dropped whole by DiagnosticRedactor and the values can carry device names,
+            // so this reports which keys the phone actually asked for.
+            debugLog("airplay SETUP stream type=$type keys=${stream.keys.sorted()}")
             when (type) {
                 STREAM_TYPE_MAIN_SCREEN, STREAM_TYPE_ALT_SCREEN -> {
                     val port = media.onScreen(this, type, stream)
@@ -538,9 +548,42 @@ class AirPlaySession(
         val type = string(body["type"])
         val params = asMap(body["params"]) ?: emptyMap()
         debugLog("airplay command type=$type keys=${params.keys.sorted()}")
+        if (type == "modesChanged" || type == "changeModes") debugLog(resourceOwnership(params))
         if (type == "requestUI") listener.onHostUiRequested(this)
         listener.onCommand(this, type, params)
         return RtspMessage.Response(status = 200)
+    }
+
+    /**
+     * Who owns the screen and audio resources is the one thing that says whether the phone ever
+     * decided to route audio here. The guessed field names came back absent, so this reports the keys
+     * the phone actually sends; ids and key names only, because values can carry device names.
+     */
+    private fun resourceOwnership(params: Map<String, Any?>): String {
+        val modes = params["modes"] as? Map<*, *> ?: params
+        val resources = (modes["resources"] as? List<*>).orEmpty().mapNotNull { entry ->
+            val resource = entry as? Map<*, *> ?: return@mapNotNull null
+            "resource" + (long(resource["resourceID"]) ?: -1L) + " owner=" + ownerOf(resource["entity"])
+        }
+        val states = (modes["appStates"] as? List<*>).orEmpty().mapNotNull { entry ->
+            val state = entry as? Map<*, *> ?: return@mapNotNull null
+            "appState" + (long(state["appStateID"]) ?: -1L) + "=" + ownerOf(state["entity"])
+        }
+        return "airplay modes resources=[${resources.joinToString(" ")}] appStates=[${states.joinToString(" ")}]"
+    }
+
+    /**
+     * `entity` names whoever holds the resource, and the protocol only ever uses three values, so
+     * anything else is reported as a shape rather than echoed: an unexpected string here could be a
+     * device name, which the redactor would then drop the whole line for.
+     */
+    private fun ownerOf(value: Any?): String = when (value) {
+        null -> "missing"
+        is Number -> "id${value.toLong()}"
+        else -> when (val holder = value.toString().lowercase()) {
+            "controller", "accessory", "none" -> holder
+            else -> "other"
+        }
     }
 
     private fun handleTeardown(request: RtspMessage.Request): RtspMessage.Response {
@@ -627,7 +670,10 @@ class AirPlaySession(
         try {
             val socket = server.accept()
             socket.setSoLinger(true, 0)
-            debugLog("airplay event connection accepted from ${socket.remoteSocketAddress}")
+            debugLog(
+                "airplay event connection accepted from ${socket.remoteSocketAddress} " +
+                    "family=${if (socket.inetAddress is Inet4Address) "IPv4" else "IPv6"}",
+            )
             eventSocket = socket
             val shared = pairVerify.shared
             if (shared == null) {

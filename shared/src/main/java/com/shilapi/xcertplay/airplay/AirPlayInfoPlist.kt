@@ -14,7 +14,12 @@ object AirPlayInfoPlist {
     private const val STREAM_TYPE_ALT_SCREEN = 111
     private const val DISPLAY_FEATURE_KNOBS = 0x02
     private const val DISPLAY_FEATURE_HIGH_FIDELITY_TOUCH = 0x08
-    private const val CARPLAY_FEATURES = 0x615653aee2L
+    /**
+     * Without this bit the iPhone never sends a SETUP for stream type 100/101/102, so video, touch and
+     * the iAP2 tunnel all work while audio stays on the phone.
+     */
+    private const val AUDIO_PCM_FEATURE = 0x40000L
+    private const val CARPLAY_FEATURES = 0x615657aee2L or AUDIO_PCM_FEATURE
     private const val CARPLAY_AUDIO_FEATURES = 0x10004540a00L
     private val CARPLAY_FEATURES_NO_AUDIO = CARPLAY_FEATURES and CARPLAY_AUDIO_FEATURES.inv()
 
@@ -105,7 +110,7 @@ object AirPlayInfoPlist {
         return listOf(
             base(100), base(100, "default"), base(100, "media"), base(100, "telephony"),
             base(100, "speechRecognition"), base(100, "alert"), base(101), base(101, "default"),
-            base(102, "default"),
+            base(102, "default"), base(102, "media"),
         )
     }
 
@@ -141,10 +146,13 @@ object AirPlayInfoPlist {
         val inputPcmMono = supportedOrDefault(config.pcmInputMonoRates, 1)
         val opus = 0x70000000
         val outputOpus = if (config.opusOutputAvailable) opus else 0
-        val inputOpus = if (config.opusInputAvailable) opus else 0
+        // A voice stream needs both directions in the same codec, so Opus is only declared there when
+        // the head unit can also send Opus; a one-way claim leaves the phone with no format it can use.
+        val duplexOpus = if (config.opusOutputAvailable && config.opusInputAvailable) opus else 0
+        val voiceOpus = if (config.microphone) duplexOpus else outputOpus
         val aacLc = if (is48) 0x800000 else 0x400000
         val pcmInput = if (config.microphone) inputPcmMono else null
-        val wirelessInput = if (config.microphone) inputPcmMono or inputOpus else null
+        val wirelessInput = if (config.microphone) inputPcmMono or duplexOpus else null
 
         return listOf(
             format(100, "compatibility", pcm, pcmInput),
@@ -152,8 +160,8 @@ object AirPlayInfoPlist {
             format(100, "default", pcm or outputOpus, wirelessInput),
             format(100, "alert", pcm or outputOpus),
             format(100, "media", pcm),
-            format(100, "telephony", pcmMono or outputOpus, wirelessInput),
-            format(100, "speechRecognition", pcmMono or outputOpus, wirelessInput),
+            format(100, "telephony", pcmMono or voiceOpus, wirelessInput),
+            format(100, "speechRecognition", pcmMono or voiceOpus, wirelessInput),
             format(101, "default", pcm or outputOpus),
             format(102, "media", aacLc),
         )

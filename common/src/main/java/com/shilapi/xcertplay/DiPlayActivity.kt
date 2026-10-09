@@ -30,7 +30,6 @@ import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.content.res.AppCompatResources
-import androidx.appcompat.widget.SwitchCompat
 import androidx.core.graphics.drawable.DrawableCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -263,6 +262,16 @@ class DiPlayActivity : ComponentActivity() {
         section(content, getString(R.string.automatic_connection), R.drawable.ic_dp_automation) { card ->
             toggle(card, getString(R.string.connect_when_diplay_opens), getString(R.string.use_your_last_connection_type_and_selected_iphone), DiPlayPreferences.autoConnect(this)) { DiPlayPreferences.saveAutoConnect(this, it) }
             toggle(card, getString(R.string.open_after_the_car_starts), getString(R.string.availability_depends_on_your_head_unit_s_startup_settings), AirPlayPersistence.loadAutoStartOnBoot(this)) { AirPlayPersistence.saveAutoStartOnBoot(this, it) }
+            card.addView(
+                button("${getString(R.string.car_name)} · ${AirPlayPersistence.loadCarName(this)}", false) {
+                    textInput(getString(R.string.car_name), AirPlayPersistence.loadCarName(this), false) { value ->
+                        AirPlayPersistence.saveCarName(this, value)
+                        render()
+                        toast(getString(R.string.saved_for_your_next_connection))
+                    }
+                },
+                matchButton(12, 60),
+            )
             card.addView(button("${getString(R.string.choose_iphone_prefix)}${DiPlayPreferences.phoneName(this)}", false) { choosePhone() }, matchButton(12, 60))
         }
         section(content, getString(R.string.display_and_performance), R.drawable.ic_dp_display) { card ->
@@ -294,11 +303,9 @@ class DiPlayActivity : ComponentActivity() {
                     it.isEnabled = enabled
                     it.alpha = alpha
                 }
-                for (i in 0 until grid.childCount) {
-                    grid.getChildAt(i).let { child ->
-                        child.isEnabled = enabled
-                        child.alpha = alpha
-                    }
+                for (button in channelButtons) {
+                    button.isEnabled = enabled
+                    button.alpha = alpha
                 }
             }
             val aaosSupported = resources.getBoolean(R.bool.config_advanced_audio_channel_mapping)
@@ -1021,19 +1028,30 @@ class DiPlayActivity : ComponentActivity() {
         } else content
     }
 
+    /**
+     * The cells used to be sized from `displayMetrics.widthPixels`, which ignores the padding of the
+     * card and section around them, so the seventh column hung off the right edge on narrow and
+     * high-density screens. Weighted rows divide the width the grid actually gets.
+     */
     private fun channelSelector(): ViewGroup {
         channelButtons.clear()
-        val grid = GridLayout(this).apply {
-            columnCount = 7
-            rowCount = 3
+        val rows = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
             setPadding(0, dp(8), 0, dp(8))
         }
+        var row: LinearLayout? = null
         for (i in 0..20) {
+            if (i % CHANNELS_PER_ROW == 0) {
+                row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+                rows.addView(row)
+            }
             val btn = Button(this).apply {
                 text = i.toString()
                 isAllCaps = false
-                textSize = 16f
-                minHeight = dp(48)
+                textSize = 14f
+                minWidth = 0
+                minimumWidth = 0
+                setPadding(dp(2), 0, dp(2), 0)
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) stateListAnimator = null
                 setOnClickListener {
                     val previous = navigationStreamType
@@ -1045,17 +1063,14 @@ class DiPlayActivity : ComponentActivity() {
                     playTestTone(i)
                 }
             }
-            val params = GridLayout.LayoutParams().apply {
-                width = 0
-                height = dp(48)
-                width = (resources.displayMetrics.widthPixels - dp(80)) / 7
-                setMargins(dp(4), dp(4), dp(4), dp(4))
-            }
-            grid.addView(btn, params)
+            row!!.addView(
+                btn,
+                LinearLayout.LayoutParams(0, dp(48), 1f).apply { setMargins(dp(3), dp(3), dp(3), dp(3)) },
+            )
             channelButtons.add(btn)
             paintChannel(i, i == navigationStreamType)
         }
-        return grid
+        return rows
     }
     private fun version() = packageManager.getPackageInfo(packageName, 0).versionName ?: "0.1.0-beta.1"
     private fun languageSettings(content: LinearLayout) {
@@ -1086,14 +1101,18 @@ class DiPlayActivity : ComponentActivity() {
         val line = row().apply { gravity = Gravity.CENTER_VERTICAL; setPadding(0, dp(12), 0, dp(12)) }
         val text = column(); text.addView(label(title, 18, TEXT, true)); text.addView(label(description, 14, MUTED).apply { setPadding(0, dp(6), dp(16), 0) })
         line.addView(text, LinearLayout.LayoutParams(0, -2, 1f))
-        line.addView(SwitchCompat(this).apply {
+        line.addView(Switch(this).apply {
             contentDescription = title
             isChecked = value
             minHeight = dp(56)
-            showText = false
+            // setShowText is Lollipop-only, which is why this row once used SwitchCompat; empty
+            // labels give the same result on older head units.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                showText = false
+                thumbTintList = ColorStateList.valueOf(ACCENT)
+            }
             textOn = ""
             textOff = ""
-            thumbTintList = ColorStateList.valueOf(ACCENT)
             setOnCheckedChangeListener { _, checked -> save(checked) }
         })
         parent.addView(line)
@@ -1149,5 +1168,6 @@ class DiPlayActivity : ComponentActivity() {
         private val TEXT = Color.rgb(241, 245, 252)
         private val MUTED = Color.rgb(168, 182, 202)
         private val WARNING = Color.rgb(255, 196, 128)
+        private const val CHANNELS_PER_ROW = 7
     }
 }

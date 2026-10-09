@@ -31,8 +31,11 @@ import java.util.Collections
  */
 internal object DeviceCapabilitySnapshot {
     private const val MDNS_PORT = 5353
+    private const val AUDIO_VIDEO_MAJOR_CLASS = 0x0400
     private const val MDNS_PORT_HEX = "14E9"
     private const val PROC_TABLES = "/proc/net/udp /proc/net/udp6"
+    private const val ARP_TABLE = "/proc/net/arp"
+    private const val UNRESOLVED_NEIGHBOUR = "00:00:00:00:00:00"
     private const val MAX_TABLE_BYTES = 256 * 1024
     private const val MAX_TABLE_ROWS = 4096
 
@@ -139,11 +142,58 @@ internal object DeviceCapabilitySnapshot {
             "frameworkSaysOn=${CarHotspotStatus.apEnabledByFramework(context)} " +
             "stickyApState=${CarHotspotStatus.stickyApState(context)}",
         "hotspot wifiEnabled=${wifiEnabled(context)}",
+        neighboursLine(),
     )
+
+    /**
+     * Whether anything is attached to the hotspot. Without this, an iPhone that joined but could not
+     * reach the AirPlay port looks identical to one that never joined. The kernel neighbour table is
+     * the only route available here: the framework getters are system-only on this API range.
+     */
+    private fun neighboursLine(): String {
+        val table = runCatching { File(ARP_TABLE).readText() }.getOrNull()
+            ?: return "hotspot neighbours readable=false"
+        val counts = arpNeighbourCounts(table.lines())
+        val perInterface = counts.entries
+            .joinToString(separator = "", prefix = "[", postfix = "]") { "${it.key}=${it.value}" }
+        return "hotspot neighbours readable=true total=${counts.values.sum()} iface$perInterface"
+    }
+
+    /** Complete neighbour rows of `/proc/net/arp`, counted per interface. Addresses are not kept. */
+    internal fun arpNeighbourCounts(lines: List<String>): Map<String, Int> {
+        val counts = linkedMapOf<String, Int>()
+        for (line in lines.drop(1)) {
+            val fields = line.trim().split(Regex("\\s+"))
+            if (fields.size < 6) continue
+            if (fields[3] == UNRESOLVED_NEIGHBOUR) continue
+            if (fields[5] == "lo") continue
+            counts[fields[5]] = (counts[fields[5]] ?: 0) + 1
+        }
+        return counts
+    }
 
     private fun wifiEnabled(context: Context): Boolean? = runCatching {
         (context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager)?.isWifiEnabled
     }.getOrNull()
+
+    /**
+     * The class of device a Bluetooth adapter announces. An app cannot change it, and a phone standing
+     * in for a head unit announces itself as a phone, so this is the one field that can explain an
+     * iPhone refusing to hand over audio for reasons outside the CarPlay protocol itself. Reflective
+     * because the compile SDK no longer exposes the getter while API 18 devices still have it.
+     */
+    private fun bluetoothClass(adapter: BluetoothAdapter?): String = runCatching {
+        val announced = adapter?.javaClass?.getMethod("getBluetoothClass")?.invoke(adapter)
+            ?: return@runCatching "unknown"
+        val device = announced.javaClass.getMethod("getDeviceClass").invoke(announced) as? Int
+            ?: return@runCatching "unknown"
+        val audioVideo = runCatching {
+            announced.javaClass
+                .getMethod("doesPatternContain", Int::class.javaPrimitiveType)
+                .invoke(announced, AUDIO_VIDEO_MAJOR_CLASS) as? Boolean
+        }.getOrNull()
+        "0x%06x major=0x%04x audioVideo=${audioVideo ?: "unknown"}".format(device, device and 0x1F00)
+    }.getOrElse { "unreadable:${it.javaClass.simpleName}" }
 
     private fun interfaces(): List<String> {
         val all = NetworkInterface.getNetworkInterfaces()?.let { Collections.list(it) }.orEmpty()
@@ -239,7 +289,8 @@ internal object DeviceCapabilitySnapshot {
                 "bydAmapService=${installed("com.byd.amapservice")} " +
                 "esFileExplorer=${installed("com.estrongs.android.pop")} " +
                 "easyPlayMod=${installed("com.shihab.diplay.legacy")}",
-            "bluetooth adapter=${bluetooth != null} enabled=$bluetoothEnabled",
+            "bluetooth adapter=${bluetooth != null} enabled=$bluetoothEnabled " +
+                "class=${bluetoothClass(bluetooth)}",
         )
     }
 }

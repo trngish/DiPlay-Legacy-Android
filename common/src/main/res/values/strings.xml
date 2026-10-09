@@ -120,6 +120,7 @@
     <string name="car_hotspot_is_off">Car hotspot is off</string>
     <string name="car_marker_horizontal">Car marker · horizontal</string>
     <string name="car_marker_vertical">Car marker · vertical</string>
+    <string name="car_name">Car name shown on your iPhone</string>
     <string name="carplay" tools:ignore="MissingTranslation">CarPlay</string>
     <string name="carplay_at_home_in_your_car">CarPlay, at home in your car.</string>
     <string name="carplay_connected">CarPlay connected</string>

@@ -114,6 +114,7 @@
     <string name="car_hotspot_is_off">车机热点未开启</string>
     <string name="car_marker_horizontal">车辆标记 · 水平</string>
     <string name="car_marker_vertical">车辆标记 · 垂直</string>
+    <string name="car_name">iPhone 上显示的车名</string>
     <string name="carplay">CarPlay</string>
     <string name="carplay_at_home_in_your_car">让 CarPlay 融入车机。</string>
     <string name="carplay_connected">CarPlay 已连接</string>

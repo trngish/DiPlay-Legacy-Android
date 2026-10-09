@@ -286,6 +286,30 @@ class AirPlayInfoPlistTest {
         assertEquals(0x4154, telephonyOutput(AirPlayInfoPlist.build(base.copy(pcmOutputMonoRates = emptySet()))))
     }
 
+    /** Claiming Opus on a voice stream the head unit can only decode one way leaves no format to open. */
+    @Test
+    fun voiceStreamsDropOpusWhenTheHeadUnitCannotSendIt() {
+        val config = AirPlayConfig(
+            deviceName = "test",
+            deviceId = "02:00:00:00:00:02",
+            btMac = "02:00:00:00:00:02",
+            sourceVersion = "366.0",
+            main = AirPlayDisplayConfig(widthPixels = 1280, heightPixels = 720),
+            microphone = true,
+            opusOutputAvailable = true,
+            opusInputAvailable = false,
+        )
+
+        fun output(audioType: String): Int = (AirPlayInfoPlist.build(config)["audioFormats"] as List<*>)
+            .map { it as Map<*, *> }
+            .first { it["audioType"] == audioType }
+            .let { it["audioOutputFormats"] as Int }
+
+        assertEquals(0x4154, output("telephony"))
+        assertEquals(0x4154, output("speechRecognition"))
+        assertEquals(0xC3FC, output("media"))
+    }
+
     @Test
     fun mainAltAndHighAudioStreamsAreDeclared() {
         val info = AirPlayInfoPlist.build(
@@ -302,5 +326,22 @@ class AirPlayInfoPlistTest {
             .map { (it as Map<*, *>)["type"] }
             .toSet()
         assertEquals(setOf(100, 101, 102), types)
+    }
+
+    /** Losing this bit is silent: video, touch and the tunnel keep working while audio stays on the phone. */
+    @Test
+    fun pcmAudioFeatureBitIsAdvertised() {
+        val info = AirPlayInfoPlist.build(
+            AirPlayConfig(
+                deviceName = "test",
+                deviceId = "02:00:00:00:00:02",
+                btMac = "02:00:00:00:00:02",
+                sourceVersion = "366.0",
+                main = AirPlayDisplayConfig(widthPixels = 1280, heightPixels = 720),
+            ),
+        )
+        val features = (info["features"] as Number).toLong()
+        assertTrue("features=$features does not advertise the PCM audio output bit", features and 0x40000L != 0L)
+        assertEquals(10, (info["audioLatencies"] as List<*>).size)
     }
 }
