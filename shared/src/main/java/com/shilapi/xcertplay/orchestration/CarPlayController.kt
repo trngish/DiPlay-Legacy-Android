@@ -43,6 +43,7 @@ import com.shilapi.xcertplay.network.WirelessHotspotInfo
 import com.shilapi.xcertplay.network.WirelessHotspotBackend
 import com.shilapi.xcertplay.network.WirelessHotspotManager
 import com.shilapi.xcertplay.transport.BlockingDuplexByteStream
+import com.shilapi.xcertplay.transport.BluetoothLinkTelemetry
 import com.shilapi.xcertplay.transport.BluetoothRfcommDuplexStream
 import com.shilapi.xcertplay.transport.Ch341DeviceMatcher
 import com.shilapi.xcertplay.transport.Ch341I2cTransport
@@ -217,6 +218,7 @@ class CarPlayController(
     private var permissionCloseable: Closeable? = null
     private var attachCloseable: Closeable? = null
     private var ch341PermissionCloseable: Closeable? = null
+    private var bluetoothTelemetry: BluetoothLinkTelemetry? = null
     private var vpnLatch = CountDownLatch(1)
     private val teardownComplete = CountDownLatch(1)
 
@@ -330,6 +332,11 @@ class CarPlayController(
             permissionCloseable = iphoneHost.registerPermissionReceiver(::onIphonePermission)
             attachCloseable = iphoneHost.registerAttachReceiver(::onIphoneAttached)
         }
+        bluetoothTelemetry = BluetoothLinkTelemetry(
+            appContext,
+            config.wirelessBluetoothDeviceAddress,
+            ::debugLog,
+        ).also { it.start() }
         startMfi()
     }
 
@@ -957,10 +964,7 @@ class CarPlayController(
                 "wireless RFCOMM connecting address=${device.address} " +
                     "uuid=$IAP2_IPHONE_UUID",
             )
-            val socket = device
-                    .createRfcommSocketToServiceRecord(UUID.fromString(IAP2_IPHONE_UUID))
-                    .also { bluetoothSocket = it }
-            connectBluetoothSocket(socket, device.address)
+            val socket = connectIap2Socket(device)
             debugLog("wireless RFCOMM connected address=${device.address}")
             if (isStaleWirelessRun(generation)) {
                 closeWirelessStack()
@@ -1666,13 +1670,18 @@ class CarPlayController(
             "wireless Bluetooth bondedIPhones=${iPhones.size} " +
                 "directlyConnected=${directlyConnectedIPhones.size}",
         )
-        val connectedIPhones = if (directlyConnectedIPhones.isNotEmpty()) {
-            directlyConnectedIPhones
-        } else {
-            val connectedAddresses = connectedBluetoothDevices(adapter).mapTo(mutableSetOf()) {
-                it.address
+        val connectedIPhones = when {
+            directlyConnectedIPhones.isNotEmpty() -> directlyConnectedIPhones
+            // The profile round trip can cost six seconds, so it is only worth paying when more than
+            // one iPhone is bonded and the answer can still change. getConnectedDevices() has been
+            // public since API 11, so this needs no version gate.
+            iPhones.size > 1 -> {
+                val connectedAddresses = connectedBluetoothDevices(adapter).mapTo(mutableSetOf()) {
+                    it.address
+                }
+                iPhones.filter { it.address in connectedAddresses }
             }
-            iPhones.filter { it.address in connectedAddresses }
+            else -> emptyList()
         }
         if (connectedIPhones.size == 1) return connectedIPhones.single()
         if (connectedIPhones.size > 1) {
@@ -1692,6 +1701,31 @@ class CarPlayController(
         throw IOException(
             "No unambiguous bonded iPhone found; pair one iPhone and retry",
         )
+    }
+
+    /**
+     * RFCOMM to the iPhone. Some older vendor stacks refuse the authorized socket for the iAP2 UUID
+     * while accepting the unauthenticated one, so one retry is worth the extra attempt. That retry is
+     * empirical practice, not derived from Apple's documentation.
+     */
+    private fun connectIap2Socket(device: BluetoothDevice): BluetoothSocket {
+        val uuid = UUID.fromString(IAP2_IPHONE_UUID)
+        val authorized = device.createRfcommSocketToServiceRecord(uuid).also { bluetoothSocket = it }
+        try {
+            connectBluetoothSocket(authorized, device.address)
+            return authorized
+        } catch (failure: IOException) {
+            debugLog(
+                "wireless RFCOMM authorized socket failed address=${device.address} " +
+                    "error=${failure.message}; retrying unauthenticated",
+            )
+            runCatching { authorized.close() }
+            val unauthenticated = device
+                .createInsecureRfcommSocketToServiceRecord(uuid)
+                .also { bluetoothSocket = it }
+            connectBluetoothSocket(unauthenticated, device.address)
+            return unauthenticated
+        }
     }
 
     private fun connectBluetoothSocket(socket: BluetoothSocket, address: String) {
@@ -1936,7 +1970,7 @@ class CarPlayController(
     }
 
     private fun closeReceivers() {
-        listOfNotNull(permissionCloseable, attachCloseable, ch341PermissionCloseable).forEach {
+        listOfNotNull(permissionCloseable, attachCloseable, ch341PermissionCloseable, bluetoothTelemetry).forEach {
             try {
                 it.close()
             } catch (_: Exception) {
@@ -1946,6 +1980,7 @@ class CarPlayController(
         permissionCloseable = null
         attachCloseable = null
         ch341PermissionCloseable = null
+        bluetoothTelemetry = null
     }
 
     private fun closeMfiSession() {

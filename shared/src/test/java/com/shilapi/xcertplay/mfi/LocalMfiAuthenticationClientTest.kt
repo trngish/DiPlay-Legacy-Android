@@ -18,6 +18,7 @@ import org.bouncycastle.asn1.x509.Time
 import org.bouncycastle.asn1.x509.V3TBSCertificateGenerator
 import org.bouncycastle.asn1.x9.X9ObjectIdentifiers
 import org.bouncycastle.asn1.DERSequence
+import org.bouncycastle.jce.provider.BouncyCastleProvider
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
@@ -78,6 +79,24 @@ class LocalMfiAuthenticationClientTest {
         assertEquals(8, count)
         assertEquals(3, client.protocolMajor())
         assertEquals(MfiCertificateType.MFI, client.certificateType)
+    }
+
+    /** The bundled provider is the fallback on ROMs whose own JCA cannot sign this key. */
+    @Test fun signaturesAlsoVerifyWithTheFallbackProvider() {
+        val client = LocalMfiAuthenticationClient.load(identity())
+        val digest = MessageDigest.getInstance("SHA-256").digest("cross-provider".toByteArray())
+        val signature = client.signChallenge(digest)
+        val provider = BouncyCastleProvider()
+        val certificate = CertificateFactory.getInstance("X.509", provider)
+            .generateCertificates(client.readCertificate().inputStream()).single()
+        val der = DERSequence(arrayOf(
+            ASN1Integer(BigInteger(1, signature.copyOfRange(0, 32))),
+            ASN1Integer(BigInteger(1, signature.copyOfRange(32, 64))),
+        )).encoded
+        val verifier = Signature.getInstance("NONEwithECDSA", provider)
+        verifier.initVerify(certificate.publicKey)
+        verifier.update(digest)
+        assertTrue(verifier.verify(der))
     }
 
     @Test fun rejectsDifferentPrivateKey() {

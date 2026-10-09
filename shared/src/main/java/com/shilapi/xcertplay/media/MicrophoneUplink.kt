@@ -128,7 +128,7 @@ internal class MicrophoneUplink(private val config: MicrophoneConfig) : Closeabl
             }
             Log.i(
                 TAG,
-                "microphone uplink started type=${config.audioType} " +
+                "microphone uplink started type=${config.audioType} codec=${config.codec} " +
                     "rate=${config.sampleRate} channels=${config.channels} " +
                     "frameMs=${config.frameMillis} port=${config.port}",
             )

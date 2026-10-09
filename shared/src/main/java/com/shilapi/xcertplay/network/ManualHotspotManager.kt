@@ -76,13 +76,24 @@ class ManualHotspotManager(
 
         val deadlineNanos = deadlineAfter(timeoutMillis)
         val apConfiguration = readApConfiguration()
+        // Before Android 11 the only readable source is the saved AP profile. Its values still win,
+        // because they are usually the only thing that describes a secured hotspot correctly, but a
+        // saved profile that lags the live hotspot must not abort the connection: report it and let
+        // the iPhone join using the settings the user can actually see.
+        val configurationIsLive = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
         if (apConfiguration != null && apConfiguration.ssid != expectedSsid) {
-            throw IOException(
-                "Manual hotspot SSID does not match the active local AP configuration: " +
-                    "'${apConfiguration.ssid}'",
+            if (configurationIsLive) {
+                throw IOException(
+                    "Manual hotspot SSID does not match the active local AP configuration: " +
+                        "'${apConfiguration.ssid}'",
+                )
+            }
+            onDiagnostic(
+                "Saved AP profile reports ssid='${apConfiguration.ssid}' while the configured " +
+                    "SSID is '$expectedSsid'; using the configured value",
             )
         }
-        validateApConfiguration(apConfiguration)
+        if (configurationIsLive) validateApConfiguration(apConfiguration)
 
         var lastReason = "local hotspot interface was not found"
         while (true) {
@@ -105,6 +116,7 @@ class ManualHotspotManager(
                 }
                 val security = apConfiguration?.security ?: expectedSecurity
                 onDiagnostic("Manual hotspot configReadable=${apConfiguration != null} " +
+                    "configLive=$configurationIsLive " +
                     "security=$security channelKnown=${channel > 0} " +
                     "hardwareAddressKnown=${localInterface.hardwareAddress != null} iface=${localInterface.name} " +
                     "family=${if (localInterface.hostAddress is Inet6Address) "IPv6" else "IPv4"}")
@@ -144,7 +156,7 @@ class ManualHotspotManager(
             if (remainingNanos <= 0) {
                 throw IOException(
                     "Timed out after ${timeoutMillis}ms waiting for the manual hotspot: " +
-                        lastReason,
+                        "$lastReason. Interfaces: ${describeInterfaces()}",
                 )
             }
             sleep(minOf(remainingNanos, INTERFACE_POLL_NANOS))
@@ -225,6 +237,23 @@ class ManualHotspotManager(
             .maxByOrNull(LocalHotspotInterface::score)
     }
 
+    /**
+     * What the interface scan actually saw. Without this a timeout only says the AP interface was
+     * missing, which cannot be distinguished from a differently named or address-less one.
+     */
+    private fun describeInterfaces(): String = try {
+        Collections.list(NetworkInterface.getNetworkInterfaces())
+            .joinToString("; ") { networkInterface ->
+                val addresses = Collections.list(networkInterface.inetAddresses)
+                    .joinToString(",") { address -> address.hostAddress ?: "?" }
+                    .ifEmpty { "none" }
+                "${networkInterface.name}{up=${networkInterface.isUp},$addresses}"
+            }
+            .ifEmpty { "none" }
+    } catch (_: SocketException) {
+        "interface enumeration failed"
+    }
+
     private fun isUsableInterface(
         networkInterface: NetworkInterface,
         primaryInterface: String?,
@@ -241,6 +270,8 @@ class ManualHotspotManager(
         var score = when {
             name.startsWith("ap") || name.contains("softap", ignoreCase = true) -> 100
             name.startsWith("p2p") -> 80
+            // LegacyHotspotRadio treats swlan as a real AP name, so it must outrank a client wlan.
+            name.startsWith("swlan") -> 90
             name.startsWith("wlan") -> 70
             else -> 0
         }

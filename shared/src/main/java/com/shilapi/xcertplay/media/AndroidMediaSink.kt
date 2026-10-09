@@ -5,9 +5,11 @@ import android.media.AudioFormat as AndroidAudioFormat
 import android.media.AudioManager
 import android.media.AudioTrack
 import android.media.MediaCodec
+import android.media.MediaCodecInfo
 import android.media.MediaCodecList
 import android.media.MediaFormat
 import android.os.Build
+import android.os.Process
 import android.util.Log
 import android.view.Surface
 import androidx.annotation.RequiresApi
@@ -19,6 +21,7 @@ import com.shilapi.xcertplay.airplay.VideoCodec
 import com.shilapi.xcertplay.airplay.toHexString
 import java.io.Closeable
 import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.Executors
@@ -239,6 +242,9 @@ private class VideoDecoder(
     }
 
     private fun run() {
+        // Two cores: decoding and presenting must outrank ordinary work, or frames age past their
+        // budget and every recovery costs a key frame.
+        Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_DISPLAY)
         try {
             while (running) {
                 val job = queue.poll(5)
@@ -307,22 +313,39 @@ private class VideoDecoder(
             if (sps.isNotEmpty()) format.setByteBuffer("csd-0", ByteBuffer.wrap(START_CODE + sps))
             if (pps.isNotEmpty()) format.setByteBuffer("csd-1", ByteBuffer.wrap(START_CODE + pps))
         }
-        var candidate: MediaCodec? = null
-        val next = try {
-            createDecoder(mime).also {
-                candidate = it
+        var next: MediaCodec? = null
+        for (attempt in decoderAttempts(mime)) {
+            val created = try {
+                attempt()
+            } catch (error: Exception) {
+                Log.w(TAG, "video decoder unavailable mime=$mime", error)
+                null
+            } ?: continue
+            val configured = try {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
-                    it.codecInfo.getCapabilitiesForType(mime).isFeatureSupported("low-latency")) {
+                    created.codecInfo.getCapabilitiesForType(mime).isFeatureSupported("low-latency")) {
                     format.setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
                 }
-                it.configure(format, surface, null, 0)
-                it.start()
+                created.configure(format, surface, null, 0)
+                created.start()
+                created
+            } catch (error: Exception) {
+                runCatching { created.release() }
+                Log.e(
+                    TAG,
+                    "video decoder configure failed name=${created.name} mime=$mime size=${width}x$height",
+                    error,
+                )
+                report(
+                    "decoder configuration failed name=${created.name} mime=$mime " +
+                        "size=${width}x$height error=${error.javaClass.simpleName}",
+                )
+                null
             }
-        } catch (error: Exception) {
-            runCatching { candidate?.release() }
-            Log.e(TAG, "video decoder configure failed mime=$mime size=${width}x$height", error)
-            report("decoder configuration failed mime=$mime size=${width}x$height error=${error.javaClass.simpleName}")
-            null
+            if (configured != null) {
+                next = configured
+                break
+            }
         }
         decoder = next
         renderedFrameLogged = false
@@ -336,24 +359,40 @@ private class VideoDecoder(
         }
     }
 
-    private fun createDecoder(mime: String): MediaCodec {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+    /**
+     * Decoder attempts, in order. A head unit's VPU decodes H.264 1080p60 in hardware while its
+     * dual-core CPU cannot software-decode a CarPlay stream in real time at all, so a vendor codec
+     * is tried first. The platform default stays as the fallback: a vendor codec that refuses this
+     * format beats no picture, which is what a failed configure used to mean.
+     */
+    private fun decoderAttempts(mime: String): List<() -> MediaCodec> {
+        val wantSoftware = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
             mime == MediaFormat.MIMETYPE_VIDEO_HEVC &&
             preferSoftwareHevcDecoder
-        ) {
-            val software = MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos.firstOrNull {
-                !it.isEncoder && it.isSoftwareOnly && mime in it.supportedTypes
-            }
-            if (software != null) {
-                try {
-                    return MediaCodec.createByCodecName(software.name)
-                } catch (error: Exception) {
-                    Log.w(TAG, "software HEVC decoder unavailable name=${software.name}", error)
-                }
-            }
-        }
-        return MediaCodec.createDecoderByType(mime)
+        val preferred = codecName(mime, software = wantSoftware)
+        val attempts = mutableListOf<() -> MediaCodec>()
+        if (preferred != null) attempts += { MediaCodec.createByCodecName(preferred) }
+        attempts += { MediaCodec.createDecoderByType(mime) }
+        return attempts
     }
+
+    private fun codecName(mime: String, software: Boolean): String? = codecInfos().firstOrNull { info ->
+        !info.isEncoder && supportsMime(info, mime) && isSoftware(info) == software
+    }?.name
+
+    private fun codecInfos(): List<MediaCodecInfo> =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos.toList()
+        } else {
+            @Suppress("DEPRECATION")
+            (0 until MediaCodecList.getCodecCount()).map { MediaCodecList.getCodecInfoAt(it) }
+        }
+
+    private fun isSoftware(info: MediaCodecInfo): Boolean = VideoCodecNames.isSoftware(info)
+
+    @Suppress("DEPRECATION")
+    private fun supportsMime(info: MediaCodecInfo, mime: String): Boolean =
+        runCatching { info.supportedTypes.any { it.equals(mime, ignoreCase = true) } }.getOrDefault(false)
 
     private fun changeSurface(surface: Surface?) {
         if (outputSurface === surface) return
@@ -537,6 +576,10 @@ private class AudioRenderer(
     private var droppedPacketsLogged = false
     private var firstAacPayloadLogged = false
     private var firstOpusShortPacketLogged = false
+    private var softwareDecoder: SoftwareOpusDecoder? = null
+    private var softwarePcm = ShortArray(0)
+    private var softwareBytes = ByteBuffer.allocate(0).order(ByteOrder.LITTLE_ENDIAN)
+    private var softwareFailureLogged = false
     private var firstInputQueuedLogged = false
     private var inputQueued = 0
     private var inputDropped = 0
@@ -585,10 +628,12 @@ private class AudioRenderer(
     }
 
     private fun run() {
+        // An underrun here is audible, so this thread outranks the video path.
+        Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO)
         try {
             when (format.codec) {
                 AudioCodecKind.AAC_LC -> configureCodec(MediaFormat.MIMETYPE_AUDIO_AAC)
-                AudioCodecKind.OPUS -> configureCodec(MediaFormat.MIMETYPE_AUDIO_OPUS)
+                AudioCodecKind.OPUS -> configureOpus()
                 AudioCodecKind.LPCM -> Unit
             }
             createTrack()
@@ -611,6 +656,44 @@ private class AudioRenderer(
             runCatching { logStatsIfDue(force = true) }
             release()
         }
+    }
+
+    /**
+     * MediaCodec first, because it is the platform path and the faster one. Android 4.4 has no Opus
+     * decoder at all, and without the software fallback every Opus stream would be dropped silently.
+     */
+    private fun configureOpus() {
+        configureCodec(MediaFormat.MIMETYPE_AUDIO_OPUS)
+        if (codec != null) {
+            report("Audio: Opus backend=mediacodec")
+            return
+        }
+        val channels = maxOf(1, format.channels)
+        val decoder = SoftwareOpusDecoder.create(format.sampleRate, channels)
+        if (decoder == null) {
+            report("Audio: no Opus decoder for rate=${format.sampleRate} channels=$channels")
+            return
+        }
+        // libopus names 120 ms as the largest frame it will decode.
+        val frameCapacity = (format.sampleRate.toLong() * 120 / 1000).toInt().coerceAtLeast(1)
+        softwarePcm = ShortArray(frameCapacity * channels)
+        softwareBytes = ByteBuffer.allocate(softwarePcm.size * 2).order(ByteOrder.LITTLE_ENDIAN)
+        softwareDecoder = decoder
+        report("Audio: Opus backend=${decoder.backend} rate=${format.sampleRate} channels=$channels")
+    }
+
+    private fun feedSoftware(decoder: SoftwareOpusDecoder, payload: ByteArray) {
+        val samples = decoder.decode(payload, 0, payload.size, softwarePcm)
+        if (samples <= 0) {
+            if (!softwareFailureLogged) {
+                softwareFailureLogged = true
+                report("Audio: software Opus decode failed code=$samples bytes=${payload.size}")
+            }
+            return
+        }
+        softwareBytes.clear()
+        for (index in 0 until samples * decoder.channels) softwareBytes.putShort(softwarePcm[index])
+        writePcm(softwareBytes.array(), 0, samples * decoder.channels * 2)
     }
 
     private fun configureCodec(mime: String) {
@@ -654,6 +737,10 @@ private class AudioRenderer(
         val minBuffer = AudioTrack.getMinBufferSize(format.sampleRate, channelMask, encoding)
         if (minBuffer <= 0) {
             Log.e(TAG, "AudioTrack buffer size unavailable rate=${format.sampleRate} channels=${format.channels}")
+            report(
+                "Audio: no AudioTrack buffer for audioType=${format.audioType} " +
+                    "rate=${format.sampleRate} channels=${format.channels}; this stream will be silent",
+            )
             return
         }
         val plan = MediaAudioBuffer.plan(format.audioType, format.sampleRate, format.channels, minBuffer, mediaBufferMillis)
@@ -864,7 +951,11 @@ private class AudioRenderer(
         (sample.toLong() and 0xffff_ffffL) * 1_000_000L / format.sampleRate
 
     private fun feedCodec(payload: ByteArray, presentationTimeUs: Long) {
-        val codec = codec ?: return
+        val codec = codec
+        if (codec == null) {
+            softwareDecoder?.let { feedSoftware(it, payload) }
+            return
+        }
         val index = codec.dequeueInputBuffer(INPUT_TIMEOUT_US)
         if (index < 0) {
             inputDropped++
@@ -1055,6 +1146,8 @@ private class AudioRenderer(
 
     @Synchronized
     private fun release() {
+        softwareDecoder?.close()
+        softwareDecoder = null
         val codec = codec
         this.codec = null
         if (codec != null) {

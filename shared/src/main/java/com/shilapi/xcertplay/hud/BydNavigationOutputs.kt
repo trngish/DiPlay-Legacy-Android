@@ -16,6 +16,7 @@ object BydNavigationOutputs {
     private val standalone = NavigationOutputWorker("diplay-standalone-output", BydStandaloneNavigationBridge::clear)
     private val hud = NavigationOutputWorker("diplay-hud-output", BydHudBridge::clear)
     private val cluster = NavigationOutputWorker("diplay-cluster-output", BydClusterBridge::clear)
+    private val lynkcoHud = NavigationOutputWorker("diplay-lynkco-hud-output", LynkCoHudBridge::clear)
 
     /** The host reports whether its CarPlay map window is on the cluster (see [BydClusterMapPause]). */
     fun setClusterMapShown(shown: Boolean) { BydClusterMapPause.clusterMapShown = shown }
@@ -42,6 +43,9 @@ object BydNavigationOutputs {
             hud.start { BydHudBridge.initialize(app) }
             cluster.start { BydClusterBridge.initialize(app) }
         }
+        if (LynkCoHudBridge.available(app)) {
+            lynkcoHud.start { LynkCoHudBridge.initialize(app) }
+        }
         BydClusterMapPause.initialize(app)
     }
 
@@ -54,8 +58,9 @@ object BydNavigationOutputs {
             hud.submit { BydHudBridge.onFrame(owned) }
             cluster.submit { BydClusterBridge.onFrame(owned) }
         }
+        lynkcoHud.submit { LynkCoHudBridge.onFrame(owned) }
     }
 
     /** Best effort while alive; Android does not guarantee callbacks before force-stop. */
-    fun endNow() { standalone.clear(); hud.clear(); cluster.clear() }
+    fun endNow() { standalone.clear(); hud.clear(); cluster.clear(); lynkcoHud.clear() }
 }

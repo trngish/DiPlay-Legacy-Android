@@ -18,6 +18,8 @@ object AirPlayInfoPlist {
     private const val CARPLAY_AUDIO_FEATURES = 0x10004540a00L
     private val CARPLAY_FEATURES_NO_AUDIO = CARPLAY_FEATURES and CARPLAY_AUDIO_FEATURES.inv()
 
+    private val VOICE_RATES = intArrayOf(8_000, 16_000, 24_000, 32_000)
+
     private const val RESOURCE_SCREEN = 1
     private const val RESOURCE_AUDIO = 2
     private const val TRANSFER_TAKE = 1
@@ -46,7 +48,7 @@ object AirPlayInfoPlist {
         )
         if (!config.disableAudioOutput) {
             info["audioLatencies"] = audioLatencies()
-            info["audioFormats"] = audioFormats(config.entertainmentSampleRate, config.microphone)
+            info["audioFormats"] = audioFormats(config)
         }
         info["extendedFeatures"] = listOf("vocoderInfo", "enhancedRequestCarUI")
         info["displays"] = displays
@@ -107,10 +109,7 @@ object AirPlayInfoPlist {
         )
     }
 
-    private fun audioFormats(
-        entertainmentRate: Int,
-        microphone: Boolean,
-    ): List<Map<String, Any?>> {
+    private fun audioFormats(config: AirPlayConfig): List<Map<String, Any?>> {
         fun format(type: Int, audioType: String, outputFormats: Int, inputFormats: Int? = null): Map<String, Any?> {
             val entry = linkedMapOf<String, Any?>(
                 "type" to type,
@@ -121,24 +120,41 @@ object AirPlayInfoPlist {
             return entry
         }
 
-        val is48 = entertainmentRate == 48000
-        val pcmVoice = 0x3fc
-        val pcm = pcmVoice or (if (is48) 0xc000 else 0xc00)
-        val pcmMono = 0x154 or (if (is48) 0x4000 else 0x400)
+        val is48 = config.entertainmentSampleRate == 48000
+        val rates = VOICE_RATES + if (is48) 48_000 else 44_100
+
+        fun mask(supported: Set<Int>, channels: Int): Int {
+            var bits = 0
+            for (rate in rates) {
+                if (rate in supported) bits = bits or (AudioStreamCodec.formatBit(rate, channels) ?: 0)
+            }
+            return bits
+        }
+
+        // An empty mask means the phone cannot open that stream at all, which is worse than naming a
+        // rate the HAL might refuse, so an unprobed or fully unsupported device declares everything.
+        fun supportedOrDefault(supported: Set<Int>, channels: Int): Int =
+            mask(supported, channels).takeIf { it != 0 } ?: mask(AudioStreamCodec.PCM_RATES.toSet(), channels)
+
+        val pcmMono = supportedOrDefault(config.pcmOutputMonoRates, 1)
+        val pcm = pcmMono or supportedOrDefault(config.pcmOutputStereoRates, 2)
+        val inputPcmMono = supportedOrDefault(config.pcmInputMonoRates, 1)
         val opus = 0x70000000
+        val outputOpus = if (config.opusOutputAvailable) opus else 0
+        val inputOpus = if (config.opusInputAvailable) opus else 0
         val aacLc = if (is48) 0x800000 else 0x400000
-        val pcmInput = if (microphone) pcmMono else null
-        val wirelessInput = if (microphone) pcmMono or opus else null
+        val pcmInput = if (config.microphone) inputPcmMono else null
+        val wirelessInput = if (config.microphone) inputPcmMono or inputOpus else null
 
         return listOf(
             format(100, "compatibility", pcm, pcmInput),
             format(101, "compatibility", pcm),
-            format(100, "default", pcm or opus, wirelessInput),
-            format(100, "alert", pcm or opus),
+            format(100, "default", pcm or outputOpus, wirelessInput),
+            format(100, "alert", pcm or outputOpus),
             format(100, "media", pcm),
-            format(100, "telephony", pcmMono or opus, wirelessInput),
-            format(100, "speechRecognition", pcmMono or opus, wirelessInput),
-            format(101, "default", pcm or opus),
+            format(100, "telephony", pcmMono or outputOpus, wirelessInput),
+            format(100, "speechRecognition", pcmMono or outputOpus, wirelessInput),
+            format(101, "default", pcm or outputOpus),
             format(102, "media", aacLc),
         )
     }

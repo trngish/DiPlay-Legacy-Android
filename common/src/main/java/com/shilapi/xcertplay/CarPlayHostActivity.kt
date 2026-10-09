@@ -70,6 +70,7 @@ import com.shilapi.xcertplay.airplay.SafeAreaRect
 import com.shilapi.xcertplay.host.R
 import com.shilapi.xcertplay.location.AndroidCarPlayLocationProvider
 import com.shilapi.xcertplay.media.AndroidMediaSink
+import com.shilapi.xcertplay.media.AudioCodecAvailability
 import com.shilapi.xcertplay.media.CarPlayTouchMapper
 import com.shilapi.xcertplay.network.CarPlayVpnService
 import com.shilapi.xcertplay.orchestration.CarPlayController
@@ -2805,6 +2806,17 @@ class CarPlayHostActivity : ComponentActivity() {
         appendLog(requestSummary)
         appendLog(support.details)
         appendLog(effectiveSummary)
+        val opusMediaCodec = AudioCodecAvailability.opusMediaCodec
+        val opusOutputAvailable = AudioCodecAvailability.opusDecoder
+        val opusInputAvailable = AudioCodecAvailability.opusEncoder
+        val pcmOutputMonoRates = AudioCodecAvailability.playableRates(1)
+        val pcmOutputStereoRates = AudioCodecAvailability.playableRates(2)
+        val pcmInputMonoRates = AudioCodecAvailability.recordableRates(1)
+        appendLog(
+            "Audio capabilities opusMediaCodec=$opusMediaCodec opusSoftware=${opusOutputAvailable && !opusMediaCodec} " +
+                "opusSoftwareBackend=${AudioCodecAvailability.opusSoftwareBackend} " +
+                "opusEncode=$opusInputAvailable play=$pcmOutputMonoRates record=$pcmInputMonoRates",
+        )
         return AirPlayConfig(
             deviceName = "DiPlay",
             deviceId = DiPlayBootstrap.deviceId(airPlayIdentity),
@@ -2815,6 +2827,11 @@ class CarPlayHostActivity : ComponentActivity() {
             rightHandDrive = rightHandDrive,
             hevc = hevcEnabled,
             microphone = microphoneAvailable,
+            opusOutputAvailable = opusOutputAvailable,
+            opusInputAvailable = opusInputAvailable,
+            pcmOutputMonoRates = pcmOutputMonoRates,
+            pcmOutputStereoRates = pcmOutputStereoRates,
+            pcmInputMonoRates = pcmInputMonoRates,
             manufacturer = normalizedManufacturer(),
             model = normalizedModel(),
             oemLabel = oemLabel,

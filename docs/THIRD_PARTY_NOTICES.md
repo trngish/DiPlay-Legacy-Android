@@ -25,6 +25,12 @@ CarPlay and the CarPlay icon are Apple Inc. marks/assets. This asset is not cove
 - Bouncy Castle 1.79 — The Legion of the Bouncy Castle Inc.; Bouncy Castle license (MIT-style).
 - JmDNS 3.6.3 — JmDNS contributors; Apache License 2.0.
 - SLF4J — QOS.ch; MIT license.
+- libopus and opusfile, prebuilt for armeabi-v7a and x86 — Xiph.Org Foundation; BSD 3-Clause, delivered through `com.droidkit:opus:1.1.1` (MIT wrapper, `github.com/actorapp/droidkit-opus`). That artifact carries no license text of its own; only its POM declares these terms.
+- Concentus 1.0.2, pure Java Opus encoder/decoder — Logan Stromberg and the listed Opus copyright holders; BSD 3-Clause, delivered through `io.github.jaredmdobson:concentus:1.0.2` (`github.com/jaredmdobson/concentus`, a fork of `github.com/lostromb/concentus`). That artifact carries no license text of its own either; only its POM points at the upstream LICENSE.
+
+It is the second back end for the Android 4.4 Opus gap: it needs no native code, so it also covers the ABIs the prebuilt libopus above skips.
+
+This Opus binary is a temporary scaffold that gives Android 4.4 a decoder where MediaCodec has none, so CarPlay calls and alerts can be heard. It has no arm64 build and its provenance is a third-party compilation, so replace it with a locally built libopus before shipping.
 
 Gradle dependency declarations and version catalog accompany the source. License files available in the resolved artifacts are included under `docs/licenses/dependencies/`.
 

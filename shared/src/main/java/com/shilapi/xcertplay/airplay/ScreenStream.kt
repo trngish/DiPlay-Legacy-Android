@@ -1,5 +1,6 @@
 package com.shilapi.xcertplay.airplay
 
+import android.os.Process
 import android.util.Log
 import java.io.Closeable
 import java.io.InputStream
@@ -41,7 +42,12 @@ class ScreenStream(private val key: ByteArray, private val onDiagnostic: (String
         bound.reuseAddress = true
         bound.bind(InetSocketAddress(InetAddress.getByName("::"), 0))
         server = bound
-        thread = Thread({ accept(bound) }, "airplay-screen").apply { isDaemon = true; start() }
+        thread = Thread({
+            // Feeding the decoder is on the critical path; a starved reader shows up as frame gaps
+            // that look like a network problem.
+            Process.setThreadPriority(Process.THREAD_PRIORITY_DISPLAY)
+            accept(bound)
+        }, "airplay-screen").apply { isDaemon = true; start() }
         return bound.localPort
     }
 

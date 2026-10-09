@@ -6,6 +6,14 @@ plugins {
 val localAuthenticationAssets = providers.environmentVariable("DIPLAY_AUTH_ASSETS_DIR")
     .orNull?.let { file(it).canonicalFile }
 
+// Likewise for the head-unit identity of the build itself. A package id or ABI set chosen by
+// accident cannot be installed over the previous one, and that is only discovered at the car, so
+// car builds have to name them explicitly instead of inheriting the source defaults.
+val localApplicationId = providers.environmentVariable("DIPLAY_APPLICATION_ID").orNull
+val localVersionSuffix = providers.environmentVariable("DIPLAY_VERSION_SUFFIX").getOrElse("")
+val localAbis = providers.environmentVariable("DIPLAY_ABIS").orNull
+    ?.split(",")?.map { it.trim() }?.filter { it.isNotEmpty() }
+
 android {
     namespace = "com.shilapi.xcertplay"
     compileSdk {
@@ -13,12 +21,17 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.shihab.diplay"
+        applicationId = localApplicationId ?: "com.shihab.diplay"
         minSdk = 19
         targetSdk = 37
         multiDexEnabled = true
         versionCode = 26
-        versionName = "0.2.7"
+        versionName = "0.2.7" + localVersionSuffix
+        // Dependency native libraries arrive with obsolete ABIs (armeabi, mips); without a filter
+        // they are packaged as-is, which costs almost 1 MB on every install.
+        ndk {
+            abiFilters += localAbis ?: listOf("arm64-v8a", "armeabi-v7a", "x86", "x86_64")
+        }
 
     }
 
@@ -107,4 +120,25 @@ tasks.register("assembleStandaloneDebug") {
     group = "build"
     description = "Build a standalone car-test APK with explicitly provisioned authentication."
     dependsOn(verifyStandaloneAuthentication, "assembleDebug")
+}
+
+val verifyStandaloneIdentity by tasks.registering {
+    group = "verification"
+    description = "Require an explicit package identity for a signed car release."
+    val applicationId = localApplicationId
+    val abis = localAbis
+    doLast {
+        check(!applicationId.isNullOrBlank()) {
+            "Car releases require DIPLAY_APPLICATION_ID; assembleRelease alone keeps the upstream id."
+        }
+        check(!abis.isNullOrEmpty()) {
+            "Car releases require DIPLAY_ABIS so the package only carries what the head unit can load."
+        }
+    }
+}
+tasks.named("preBuild") { mustRunAfter(verifyStandaloneIdentity) }
+tasks.register("assembleStandaloneRelease") {
+    group = "build"
+    description = "Build a signed car release with explicitly provisioned authentication and identity."
+    dependsOn(verifyStandaloneAuthentication, verifyStandaloneIdentity, "assembleRelease")
 }

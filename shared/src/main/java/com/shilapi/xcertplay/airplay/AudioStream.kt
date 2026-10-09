@@ -218,6 +218,13 @@ object AudioStreamCodec {
         }
     }
 
+    /** The declaration side of [fromFormatBits]: the format bit for one rate and channel count. */
+    fun formatBit(sampleRateHz: Int, channels: Int): Int? =
+        PCM_FORMAT.entries.firstOrNull { it.value == (sampleRateHz to channels) }?.key?.toInt()
+
+    /** Rates an audio format mask can name; iterate it to declare only what the device can render. */
+    val PCM_RATES = intArrayOf(8_000, 16_000, 24_000, 32_000, 44_100, 48_000)
+
     private const val AAC_LC_44K_STEREO = 0x400000L
     private const val AAC_LC_48K_STEREO = 0x800000L
     private const val OPUS_MONO = 0x10000000L or 0x20000000L or 0x40000000L

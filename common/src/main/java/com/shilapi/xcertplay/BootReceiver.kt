@@ -8,7 +8,11 @@ import android.util.Log
 /** Starts the CarPlay host after boot when the user has enabled the startup option. */
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        if (intent.action != Intent.ACTION_BOOT_COMPLETED) return
+        val action = intent.action
+        if (action != Intent.ACTION_BOOT_COMPLETED &&
+            action != "com.ecarx.action.BOOT_COMPLETED" &&
+            action != "com.geely.action.BOOT_COMPLETED"
+        ) return
         if (!AirPlayPersistence.loadAutoStartOnBoot(context)) return
 
         val launch = Intent(context, DiPlayActivity::class.java).apply {

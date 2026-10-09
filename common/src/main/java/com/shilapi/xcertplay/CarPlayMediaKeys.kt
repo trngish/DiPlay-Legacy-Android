@@ -48,9 +48,30 @@ internal object CarPlayMediaKeys {
         protected var context: Context? = null
         protected var controller: CarPlayController? = null
         private var focusHeld = false
+        private var wasPausedByTransient = false
         private val focusListener = AudioManager.OnAudioFocusChangeListener { change ->
             Log.i(TAG, "audio focus change=$change")
-            if (change == AudioManager.AUDIOFOCUS_LOSS) focusHeld = false
+            when (change) {
+                AudioManager.AUDIOFOCUS_LOSS -> {
+                    focusHeld = false
+                    wasPausedByTransient = false
+                }
+                AudioManager.AUDIOFOCUS_LOSS_TRANSIENT,
+                AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {
+                    if (focusHeld) {
+                        wasPausedByTransient = true
+                        send(CarPlayMediaButton.PAUSE)
+                    }
+                    focusHeld = false
+                }
+                AudioManager.AUDIOFOCUS_GAIN -> {
+                    regainFocus()
+                    if (wasPausedByTransient) {
+                        wasPausedByTransient = false
+                        send(CarPlayMediaButton.PLAY)
+                    }
+                }
+            }
         }
 
         override fun attach(context: Context, controller: CarPlayController) {
@@ -79,6 +100,13 @@ internal object CarPlayMediaKeys {
         }
 
         override fun dispatch(event: KeyEvent): Boolean {
+            if (CarPlayMediaButton.opensSiri(event.keyCode)) {
+                if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+                    val sent = controller?.requestSiri() == true
+                    Log.i(TAG, "Siri key ${event.keyCode} sent=$sent")
+                }
+                return true
+            }
             val index = CarPlayMediaButton.forKeyCode(event.keyCode) ?: return false
             if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) send(index)
             return true
@@ -192,7 +220,8 @@ internal class CarPlayMediaCallback(
         val index = when (event.keyCode) {
             KeyEvent.KEYCODE_MEDIA_PLAY,
             KeyEvent.KEYCODE_MEDIA_PAUSE,
-            CarPlayMediaButton.KEYCODE_BYD_AUTO_MEDIA_PLAY_PAUSE -> CarPlayMediaButton.PLAY_PAUSE
+            CarPlayMediaButton.KEYCODE_BYD_AUTO_MEDIA_PLAY_PAUSE,
+            CarPlayMediaButton.KEYCODE_ECARX_MEDIA_TOGGLE -> CarPlayMediaButton.PLAY_PAUSE
             else -> CarPlayMediaButton.forKeyCode(event.keyCode) ?: return false
         }
         if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) send(index, null)
@@ -206,5 +235,33 @@ class CarPlayMediaButtonReceiver : BroadcastReceiver() {
         @Suppress("DEPRECATION")
         val event = intent.getParcelableExtra<KeyEvent>(Intent.EXTRA_KEY_EVENT) ?: return
         if (CarPlayMediaKeys.dispatch(event)) abortBroadcast()
+    }
+}
+
+/** Handles ECARX / LynkCo / Geely steering-wheel media & voice broadcast intents. */
+class LynkCoMediaKeyReceiver : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent) {
+        when (intent.action) {
+            "com.ecarx.action.VOICE_KEY",
+            "com.geely.action.VOICE_KEY" -> {
+                val event = @Suppress("DEPRECATION") intent.getParcelableExtra<KeyEvent>(Intent.EXTRA_KEY_EVENT)
+                val keyCode = event?.keyCode ?: intent.getIntExtra("keyCode", intent.getIntExtra("key_code", 220))
+                CarPlayMediaKeys.dispatch(KeyEvent(KeyEvent.ACTION_DOWN, keyCode))
+                abortBroadcast()
+            }
+            "com.ecarx.action.MEDIA_KEY",
+            "com.geely.action.MEDIA_KEY" -> {
+                val event = @Suppress("DEPRECATION") intent.getParcelableExtra<KeyEvent>(Intent.EXTRA_KEY_EVENT)
+                if (event != null) {
+                    if (CarPlayMediaKeys.dispatch(event)) abortBroadcast()
+                } else {
+                    val code = intent.getIntExtra("keyCode", intent.getIntExtra("key_code", -1))
+                    if (code != -1) {
+                        CarPlayMediaKeys.dispatch(KeyEvent(KeyEvent.ACTION_DOWN, code))
+                        abortBroadcast()
+                    }
+                }
+            }
+        }
     }
 }

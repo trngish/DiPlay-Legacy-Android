@@ -45,6 +45,20 @@ data class AirPlayConfig(
     val hevc: Boolean = false,
     val disableAudioOutput: Boolean = false,
     val microphone: Boolean = false,
+    /**
+     * Opus bits reach the phone only when the ROM instantiates the codecs (see AudioCodecAvailability);
+     * Android 4.4 has neither, and declaring them there silences notifications, Siri and calls.
+     */
+    val opusOutputAvailable: Boolean = true,
+    val opusInputAvailable: Boolean = true,
+    /**
+     * PCM rates the device can actually render or record, per channel count. A rate the audio HAL
+     * refuses becomes silence later with no protocol error, so it must not appear in the mask.
+     * Defaults keep every rate declared for callers that do not probe, such as tests.
+     */
+    val pcmOutputMonoRates: Set<Int> = AudioStreamCodec.PCM_RATES.toSet(),
+    val pcmOutputStereoRates: Set<Int> = AudioStreamCodec.PCM_RATES.toSet(),
+    val pcmInputMonoRates: Set<Int> = AudioStreamCodec.PCM_RATES.toSet(),
     val manufacturer: String = "xcertplay",
     val model: String = "xcertplay",
     val oemLabel: String = "xcertplay",

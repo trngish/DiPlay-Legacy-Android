@@ -40,6 +40,12 @@ dependencies {
     implementation 'androidx.annotation:annotation:1.7.1'
     implementation libs.bouncycastle
     implementation libs.jmdns
+    // Scaffold for Android 4.4, whose MediaCodec has no Opus at all. This is a third-party prebuilt
+    // libopus (no arm64 build), so replace it with a locally built libopus before shipping.
+    implementation 'com.droidkit:opus:1.1.1'
+    // Pure Java Opus, used when the prebuilt library above cannot be loaded. Needs no native code,
+    // so it also works on ABIs the prebuilt library skips entirely.
+    implementation 'io.github.jaredmdobson:concentus:1.0.2'
     testImplementation libs.junit
     testImplementation 'org.robolectric:robolectric:4.17'
 }

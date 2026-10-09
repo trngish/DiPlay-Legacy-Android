@@ -214,6 +214,79 @@ class AirPlayInfoPlistTest {
     }
 
     @Test
+    fun opusOutputIsAdvertisedOnlyWhenTheRomCanDecodeIt() {
+        val base = AirPlayConfig(
+            deviceName = "test",
+            deviceId = "02:00:00:00:00:02",
+            btMac = "02:00:00:00:00:02",
+            sourceVersion = "366.0",
+            main = AirPlayDisplayConfig(widthPixels = 1280, heightPixels = 720),
+        )
+        val opusBits = 0x70000000
+
+        fun outputs(info: Map<String, Any?>): List<Int> =
+            (info["audioFormats"] as List<*>)
+                .map { (it as Map<*, *>)["audioOutputFormats"] as Int }
+
+        assertTrue(outputs(AirPlayInfoPlist.build(base)).any { it and opusBits != 0 })
+
+        val legacy = outputs(AirPlayInfoPlist.build(base.copy(opusOutputAvailable = false)))
+        assertTrue(legacy.none { it and opusBits != 0 })
+        // PCM and AAC-LC stay declared, so the phone never picks a format this ROM cannot decode.
+        assertTrue(legacy.all { it != 0 })
+        assertEquals(outputs(AirPlayInfoPlist.build(base)).size, legacy.size)
+    }
+
+    @Test
+    fun microphoneUplinkAdvertisesPcmWithoutAnOpusEncoder() {
+        val microphone = AirPlayConfig(
+            deviceName = "test",
+            deviceId = "02:00:00:00:00:02",
+            btMac = "02:00:00:00:00:02",
+            sourceVersion = "366.0",
+            main = AirPlayDisplayConfig(widthPixels = 1280, heightPixels = 720),
+            microphone = true,
+        )
+
+        fun inputs(info: Map<String, Any?>): List<Int> =
+            (info["audioFormats"] as List<*>)
+                .map { it as Map<*, *> }
+                .mapNotNull { it["audioInputFormats"] as? Int }
+
+        assertEquals(listOf(0x4154, 0x70004154, 0x70004154, 0x70004154), inputs(AirPlayInfoPlist.build(microphone)))
+        assertEquals(
+            listOf(0x4154, 0x4154, 0x4154, 0x4154),
+            inputs(AirPlayInfoPlist.build(microphone.copy(opusInputAvailable = false))),
+        )
+    }
+
+    @Test
+    fun telephonyOnlyAdvertisesPcmRatesTheDeviceCanRender() {
+        val base = AirPlayConfig(
+            deviceName = "test",
+            deviceId = "02:00:00:00:00:02",
+            btMac = "02:00:00:00:00:02",
+            sourceVersion = "366.0",
+            main = AirPlayDisplayConfig(widthPixels = 1280, heightPixels = 720),
+            opusOutputAvailable = false,
+        )
+
+        fun telephonyOutput(info: Map<String, Any?>): Int =
+            (info["audioFormats"] as List<*>)
+                .map { it as Map<*, *> }
+                .single { it["audioType"] == "telephony" }["audioOutputFormats"] as Int
+
+        // A HAL that only accepts 16 kHz mono must not be offered 8/24/32/48 kHz for the call stream.
+        assertEquals(
+            0x10,
+            telephonyOutput(AirPlayInfoPlist.build(base.copy(pcmOutputMonoRates = setOf(16_000)))),
+        )
+        assertEquals(0x4154, telephonyOutput(AirPlayInfoPlist.build(base)))
+        // An unsupported probe result declares everything: naming no format at all is the certain failure.
+        assertEquals(0x4154, telephonyOutput(AirPlayInfoPlist.build(base.copy(pcmOutputMonoRates = emptySet()))))
+    }
+
+    @Test
     fun mainAltAndHighAudioStreamsAreDeclared() {
         val info = AirPlayInfoPlist.build(
             AirPlayConfig(

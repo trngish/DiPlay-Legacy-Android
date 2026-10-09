@@ -57,6 +57,8 @@
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="com.ecarx.action.BOOT_COMPLETED" />
+                <action android:name="com.geely.action.BOOT_COMPLETED" />
             </intent-filter>
         </receiver>
 
@@ -65,6 +67,17 @@
             android:exported="true">
             <intent-filter android:priority="1000">
                 <action android:name="android.intent.action.MEDIA_BUTTON" />
+            </intent-filter>
+        </receiver>
+
+        <receiver
+            android:name="com.shilapi.xcertplay.LynkCoMediaKeyReceiver"
+            android:exported="true">
+            <intent-filter android:priority="1000">
+                <action android:name="com.ecarx.action.MEDIA_KEY" />
+                <action android:name="com.ecarx.action.VOICE_KEY" />
+                <action android:name="com.geely.action.MEDIA_KEY" />
+                <action android:name="com.geely.action.VOICE_KEY" />
             </intent-filter>
         </receiver>
     </application>
